@@ -1,0 +1,22 @@
+[project]
+name = "search-engine"
+version = "0.1.0"
+description = "A Python search engine built from scratch for indexing and retrieving Reddit and arXiv documents."
+readme = "README.md"
+requires-python = ">=3.13"
+
+dependencies = [
+    "arxiv>=4.0.1",
+    "python-dotenv>=1.0",
+    "praw>=8.0.3",
+]
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.3.0",
+    "pytest>=8.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.16,<0.13"]
+build-backend = "uv_build"

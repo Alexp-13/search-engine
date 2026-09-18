@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+wheels/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Virtual environments
+.venv/
+
+# Secrets
+.env
+
+# Tests / tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local corpus
+data/*
+!data/README.md
+!data/corpus.demo.jsonl
+
+# Notebooks
+test.notebook.ipynb
+.ipynb_checkpoints/
+
+# Course material
+sujets/
