@@ -18,8 +18,8 @@ Work in progress.
 The project uses Python 3.13 and [uv](https://docs.astral.sh/uv/) for dependency management.
 
 ```bash
-git clone <repository-url>
-cd <repository>
+git clone https://github.com/Alexp-13/search-engine.git
+cd search-engine
 uv sync
 ```
 
