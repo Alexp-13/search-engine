@@ -9,13 +9,21 @@ dependencies = [
     "arxiv>=4.0.1",
     "python-dotenv>=1.0",
     "praw>=8.0.3",
+    "pandas>=3.0",
 ]
 
 [dependency-groups]
 dev = [
     "ipykernel>=7.3.0",
+    "nbclient>=0.11.0",
+    "nbformat>=5.11.1",
+    "pdoc>=16.0.0",
     "pytest>=8.0",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
 
 [build-system]
 requires = ["uv_build>=0.12.16,<0.13"]
