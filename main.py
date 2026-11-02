@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 from prawcore import PrawcoreException
 from requests.exceptions import RequestException
 
-from search_engine import Corpus
+from search_engine import Corpus, SearchEngine
 from search_engine.collectors import collect_arxiv, collect_reddit
 
 
@@ -106,14 +106,17 @@ def show_summary(corpus: Corpus) -> None:
 
 
 def run_menu(corpus: Corpus) -> None:
-    """Read menu choices and display documents or author statistics.
+    """Read menu choices and display corpus data or ranked search results.
+
+    Build one search engine and reuse its index throughout the session.
 
     Args:
-        corpus: Collection to explore. Entering 0 exits the menu.
+        corpus: Loaded collection to explore. Entering 0 exits the menu.
     """
+    engine = SearchEngine(corpus)
     while True:
         print("\n1. Newest documents\n2. Documents by title\n3. Corpus statistics")
-        print("4. Author statistics\n5. Document details\n0. Quit")
+        print("4. Author statistics\n5. Document details\n6. Search documents\n0. Quit")
         choice = input("Choice: ").strip()
         try:
             if choice == "0":
@@ -140,8 +143,16 @@ def run_menu(corpus: Corpus) -> None:
                     print(f"Unknown document ID: {doc_id}")
                     continue
                 corpus.documents[doc_id].display()
+            elif choice == "6":
+                keywords = input("Keywords: ").strip()
+                count = int(input("Number of documents [5]: ").strip() or "5")
+                results = engine.search(keywords, count)
+                if results.empty:
+                    print("No results.")
+                else:
+                    print(results.to_string(index=False))
             else:
-                print("Choose an option from 0 to 5.")
+                print("Choose an option from 0 to 6.")
         except ValueError as error:
             print(f"Invalid input: {error}")
 
