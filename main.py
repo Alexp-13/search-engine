@@ -89,6 +89,8 @@ def collect_corpus(args: argparse.Namespace) -> Corpus:
 def show_summary(corpus: Corpus) -> None:
     """Print corpus size, source counts, per-document counts, and joined text size.
 
+    Compute the joined length without building or populating the text cache.
+
     Args:
         corpus: Collection whose statistics should be displayed.
     """
@@ -98,7 +100,9 @@ def show_summary(corpus: Corpus) -> None:
         print(f"{source}: {count} documents")
     for row in corpus.document_stats():
         print(f"{row['doc_id']}: {row['word_count']} words, {row['sentence_count']} sentences")
-    print(f"Joined text: {len(corpus.get_text())} characters")
+    text_length = sum(len(doc.texte) for doc in corpus.documents.values())
+    text_length += max(len(corpus) - 1, 0)
+    print(f"Joined text: {text_length} characters")
 
 
 def run_menu(corpus: Corpus) -> None:

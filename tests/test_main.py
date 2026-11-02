@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from main import main
+from main import main, show_summary
 from search_engine import Corpus, Document
 
 
@@ -38,3 +38,34 @@ def test_author_menu(
     output = capsys.readouterr().out
     assert "Alice: 1 documents" in output
     assert "5.0 characters" in output
+
+
+def test_summary_without_building_text(
+    corpus: Corpus, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The summary counts the separator without calling get_text."""
+    corpus.add(Document("First", "Alice", datetime(2026, 1, 1), "", "Hello"))
+    corpus.add(Document("Second", "Bob", datetime(2026, 1, 1), "", "World"))
+    monkeypatch.setattr(corpus, "get_text", lambda: pytest.fail("Text was built."))
+
+    show_summary(corpus)
+
+    assert "Joined text: 11 characters" in capsys.readouterr().out
+
+
+def test_summary_empty_corpus(corpus: Corpus, capsys: pytest.CaptureFixture[str]) -> None:
+    """An empty corpus has no text or separators."""
+    show_summary(corpus)
+
+    assert "Joined text: 0 characters" in capsys.readouterr().out
+
+
+def test_summary_empty_texts(corpus: Corpus, capsys: pytest.CaptureFixture[str]) -> None:
+    """Two empty documents still contribute one newline separator."""
+    corpus.add(Document("First", "Alice", datetime(2026, 1, 1), "", ""))
+    corpus.add(Document("Second", "Bob", datetime(2026, 1, 1), "", ""))
+
+    show_summary(corpus)
+
+    assert "Joined text: 1 characters" in capsys.readouterr().out

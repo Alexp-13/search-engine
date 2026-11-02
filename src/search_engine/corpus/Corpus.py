@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import ClassVar
@@ -48,6 +49,8 @@ class Corpus:
         self.documents: dict[int, Document] = {}
         self.authors: dict[str, Author] = {}
         self.id_document = 0
+        self._text_cache: str | None = None
+        self._document_bounds: list[tuple[int, int]] = []
 
     def add(self, document: Document) -> int:
         """Assign a document ID and register all of its authors.
@@ -65,6 +68,7 @@ class Corpus:
                 self.authors[name] = Author(name)
             self.authors[name].add(doc_id, document)
         self.id_document += 1
+        self._invalidate_text_cache()
         return doc_id
 
     @staticmethod
@@ -101,6 +105,7 @@ class Corpus:
             if len(doc.texte) >= min_length
         }
         self.authors = self._build_authors(self.documents)
+        self._invalidate_text_cache()
         return previous_count - len(self)
 
     def author_stats(self, name: str) -> dict[str, int | float]:
@@ -142,9 +147,61 @@ class Corpus:
             for doc_id, doc in sorted(self.documents.items())
         ]
 
+    def _invalidate_text_cache(self) -> None:
+        """Discard the joined text and its document boundaries."""
+        self._text_cache = None
+        self._document_bounds = []
+
     def get_text(self) -> str:
-        """Join document texts in ID order, separating documents by a newline."""
-        return "\n".join(doc.texte for _, doc in sorted(self.documents.items()))
+        """Return document texts joined in ID order with newline separators.
+
+        Build and cache the string and document boundaries on the first call.
+        Adding, filtering, or successfully loading documents invalidates them.
+        Direct edits to document text or the documents dictionary are not
+        detected automatically.
+
+        Returns:
+            The cached joined text, or an empty string for an empty corpus.
+        """
+        if self._text_cache is None:
+            texts: list[str] = []
+            bounds: list[tuple[int, int]] = []
+            offset = 0
+            for _, document in sorted(self.documents.items()):
+                text = document.texte
+                texts.append(text)
+                bounds.append((offset, offset + len(text)))
+                offset += len(text) + 1
+            self._text_cache = "\n".join(texts)
+            self._document_bounds = bounds
+        return self._text_cache
+
+    def search(self, mot_cle: str) -> list[str]:
+        """Return passages containing a literal keyword, ignoring case.
+
+        Matches may be substrings of words and do not overlap. Search the
+        cached joined text within each document's boundaries.
+
+        Args:
+            mot_cle: Literal text to find; regex characters are escaped.
+
+        Returns:
+            One passage per occurrence, in document ID and occurrence order.
+            Passages preserve the original text and include up to 30
+            characters on each side, bounded by the containing document.
+            An empty keyword or no matches returns an empty list.
+        """
+        if not mot_cle:
+            return []
+        text = self.get_text()
+        pattern = re.compile(re.escape(mot_cle), re.IGNORECASE)
+        passages: list[str] = []
+        for start, end in self._document_bounds:
+            for match in pattern.finditer(text, start, end):
+                left = max(start, match.start() - 30)
+                right = min(end, match.end() + 30)
+                passages.append(text[left:right])
+        return passages
 
     def show_by_date(self, n: int = 10) -> None:
         """Print up to n documents, newest first, with IDs breaking date ties.
@@ -296,6 +353,7 @@ class Corpus:
         self.documents = documents
         self.authors = authors
         self.id_document = next_id
+        self._invalidate_text_cache()
         return self
 
     @staticmethod

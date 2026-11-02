@@ -162,6 +162,7 @@ def test_load_rejects_counter_collision(corpus: Corpus, tmp_path: Path) -> None:
     """An invalid saved counter is rejected without replacing the active state."""
     document = Document("Example", "Alice", datetime(2026, 1, 1), "", "Text")
     corpus.add(document)
+    cached_text = corpus.get_text()
     path = tmp_path / "invalid.jsonl"
     metadata = {"record_type": "corpus", "nom": "Wrong name", "id_document": 0}
     path.write_text(
@@ -175,3 +176,105 @@ def test_load_rejects_counter_collision(corpus: Corpus, tmp_path: Path) -> None:
     assert corpus.nom == "Neural networks"
     assert corpus.id_document == 1
     assert corpus.documents[0] is document
+    assert corpus.get_text() is cached_text
+    assert corpus.search("text") == ["Text"]
+
+
+def test_get_text_is_cached(corpus: Corpus) -> None:
+    """Searches reuse the same joined string until the corpus changes."""
+    corpus.add(Document("First", "Alice", datetime(2026, 1, 1), "", "Hello"))
+    corpus.add(Document("Second", "Bob", datetime(2026, 1, 1), "", "World"))
+
+    text = corpus.get_text()
+
+    assert text == "Hello\nWorld"
+    assert corpus.search("world") == ["World"]
+    assert corpus.get_text() is text
+
+
+def test_search_literal_keyword_and_case(corpus: Corpus) -> None:
+    """Each C++ occurrence is found literally without changing its case."""
+    text = "Code in C++. More C++."
+    corpus.add(Document("Example", "Alice", datetime(2026, 1, 1), "", text))
+
+    assert corpus.search("c++") == [text, text]
+
+
+def test_search_limits_context(corpus: Corpus) -> None:
+    """A passage includes at most 30 characters on either side."""
+    text = "a" * 40 + "target" + "b" * 40
+    corpus.add(Document("Example", "Alice", datetime(2026, 1, 1), "", text))
+
+    assert corpus.search("target") == ["a" * 30 + "target" + "b" * 30]
+
+
+def test_search_stays_within_documents(corpus: Corpus) -> None:
+    """Neither passages nor occurrences cross document boundaries."""
+    corpus.add(Document("First", "Alice", datetime(2026, 1, 1), "", "target"))
+    corpus.add(Document("Second", "Bob", datetime(2026, 1, 1), "", "neighbor"))
+
+    assert corpus.search("target") == ["target"]
+    assert corpus.search("neighbor") == ["neighbor"]
+    assert corpus.search("target\nneighbor") == []
+
+
+def test_search_empty_and_missing_keyword(corpus: Corpus) -> None:
+    """Empty input, empty corpora, and missing words return no passages."""
+    assert corpus.search("") == []
+    assert corpus.search("missing") == []
+
+    corpus.add(Document("Example", "Alice", datetime(2026, 1, 1), "", "Hello"))
+
+    assert corpus.search("missing") == []
+
+
+def test_add_invalidates_text_cache(corpus: Corpus) -> None:
+    """A document added after a search appears in the next search."""
+    corpus.add(Document("First", "Alice", datetime(2026, 1, 1), "", "Old text"))
+    corpus.search("old")
+
+    corpus.add(Document("Second", "Bob", datetime(2026, 1, 1), "", "New text"))
+
+    assert corpus.get_text() == "Old text\nNew text"
+    assert corpus.search("new") == ["New text"]
+
+
+def test_filter_invalidates_text_cache(corpus: Corpus) -> None:
+    """Filtering updates both the joined text and shifted document bounds."""
+    retained_text = "target" + "b" * 100
+    corpus.add(Document("Short", "Alice", datetime(2026, 1, 1), "", "Short"))
+    corpus.add(Document("Long", "Bob", datetime(2026, 1, 1), "", retained_text))
+    corpus.get_text()
+
+    assert corpus.remove_short_documents() == 1
+    assert corpus.get_text() == retained_text
+    assert corpus.search("short") == []
+    assert corpus.search("target") == ["target" + "b" * 30]
+
+
+def test_load_invalidates_text_cache(corpus: Corpus, tmp_path: Path) -> None:
+    """Loading replaces cached content rather than retaining later additions."""
+    corpus.add(Document("Saved", "Alice", datetime(2026, 1, 1), "", "Saved needle"))
+    path = tmp_path / "corpus.jsonl"
+    corpus.save(path)
+    corpus.add(Document("Extra", "Bob", datetime(2026, 1, 1), "", "Extra target"))
+    corpus.search("target")
+
+    corpus.load(path)
+
+    assert corpus.get_text() == "Saved needle"
+    assert corpus.search("target") == []
+    assert corpus.search("needle") == ["Saved needle"]
+
+
+def test_load_empty_file_clears_text_cache(corpus: Corpus, tmp_path: Path) -> None:
+    """Loading an empty file removes previously searchable passages."""
+    corpus.add(Document("Example", "Alice", datetime(2026, 1, 1), "", "target"))
+    corpus.search("target")
+    path = tmp_path / "empty.jsonl"
+    path.write_text("", encoding="utf-8")
+
+    corpus.load(path)
+
+    assert corpus.get_text() == ""
+    assert corpus.search("target") == []
