@@ -6,13 +6,7 @@ import pandas as pd
 import pytest
 from matplotlib.figure import Figure
 
-from search_engine import Corpus, Document
-from search_engine.search.SearchEngine import (
-    analyser_corpus,
-    calculer_tfidf,
-    construire_index,
-    get_word_frequencies,
-)
+from search_engine import Corpus, Document, SearchEngine
 from search_engine.visualizations import plot_word_frequencies
 
 
@@ -51,9 +45,10 @@ def test_plot_selected_statistics(corpus: Corpus) -> None:
     """The chart reuses the limited selection and alphabetical frequency ties."""
     corpus.add(Document("First", "Alice", datetime(2026, 1, 1), "", "Cat cat dog"))
     corpus.add(Document("Second", "Bob", datetime(2026, 1, 1), "", "dog fish"))
-    _, freq, _ = analyser_corpus(corpus)
+    engine = SearchEngine(corpus)
+    freq = engine.freq
 
-    figure = plot_word_frequencies(get_word_frequencies(freq, 2))
+    figure = plot_word_frequencies(SearchEngine.get_word_frequencies(freq, 2))
 
     axes = figure.axes[0]
     assert [label.get_text() for label in axes.get_yticklabels()] == ["cat", "dog"]
@@ -91,11 +86,12 @@ def test_plot_after_tfidf(
     """Charts retain occurrence counts after weighting, including zero-IDF terms."""
     corpus.add(Document("First", "Alice", datetime(2026, 1, 1), "", "dog cat cat"))
     corpus.add(Document("Second", "Bob", datetime(2026, 1, 1), "", "fish dog"))
-    _, _, document_counts = analyser_corpus(corpus)
-    vocab, freq, mat_TF, _ = construire_index(document_counts)
+    engine = SearchEngine(corpus)
+    document_counts = engine.document_counts
+    vocab, freq = engine.vocab, engine.freq
     original_freq = freq.copy()
-    idf, mat_TFxIDF = calculer_tfidf(mat_TF, vocab)
-    table = get_word_frequencies(freq, n)
+    idf, mat_TFxIDF = engine.idf, engine.mat_TFxIDF
+    table = SearchEngine.get_word_frequencies(freq, n)
     original_table = table.copy()
 
     figure = plot_word_frequencies(table)
@@ -117,11 +113,12 @@ def test_plot_without_terms_after_tfidf(corpus: Corpus, text: str | None) -> Non
     """Empty vocabularies still produce a Figure after the full analysis pipeline."""
     if text is not None:
         corpus.add(Document("Empty", "Alice", datetime(2026, 1, 1), "", text))
-    _, _, document_counts = analyser_corpus(corpus)
-    vocab, freq, mat_TF, _ = construire_index(document_counts)
-    idf, mat_TFxIDF = calculer_tfidf(mat_TF, vocab)
+    engine = SearchEngine(corpus)
+    document_counts = engine.document_counts
+    vocab, freq = engine.vocab, engine.freq
+    idf, mat_TFxIDF = engine.idf, engine.mat_TFxIDF
 
-    figure = plot_word_frequencies(get_word_frequencies(freq, 10))
+    figure = plot_word_frequencies(SearchEngine.get_word_frequencies(freq, 10))
 
     assert idf == []
     assert mat_TFxIDF.shape == (len(corpus), 0)
