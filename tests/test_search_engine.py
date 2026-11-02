@@ -9,6 +9,7 @@ from scipy.sparse import csr_matrix
 from search_engine import Corpus, Document
 from search_engine.search.SearchEngine import (
     analyser_corpus,
+    calculer_tfidf,
     construire_index,
     get_word_frequencies,
     nettoyer_texte,
@@ -229,3 +230,93 @@ def test_index_empty_document_row(corpus: Corpus) -> None:
     assert mat_TF.shape == (2, 1)
     assert mat_TF.toarray().tolist() == [[0], [2]]
     assert doc_ids == [0, 1]
+
+
+def test_calculer_tfidf() -> None:
+    """Known weights produce a second matrix without changing TF statistics."""
+    vocab, freq, mat_TF, doc_ids = construire_index(
+        {0: {"cat": 2, "dog": 1}, 1: {"dog": 1, "fish": 1}},
+    )
+    original_freq = freq.copy()
+
+    idf, mat_TFxIDF = calculer_tfidf(mat_TF, vocab)
+
+    assert idf == pytest.approx([0.6931471805599453, 0, 0.6931471805599453])
+    assert isinstance(mat_TFxIDF, csr_matrix)
+    assert mat_TFxIDF.shape == mat_TF.shape == (2, 3)
+    assert mat_TFxIDF.toarray()[0].tolist() == pytest.approx([1.3862943611198906, 0, 0])
+    assert mat_TFxIDF.toarray()[1].tolist() == pytest.approx([0, 0, 0.6931471805599453])
+    assert mat_TFxIDF.nnz == 2
+    assert mat_TF.toarray().tolist() == [[2, 1, 0], [0, 1, 1]]
+    assert vocab == {
+        "cat": {"id": 0, "tf": 2, "df": 1},
+        "dog": {"id": 1, "tf": 2, "df": 2},
+        "fish": {"id": 2, "tf": 1, "df": 1},
+    }
+    assert doc_ids == [0, 1]
+    pd.testing.assert_frame_equal(freq, original_freq)
+
+
+def test_tfidf_column_ids() -> None:
+    """Weights follow column IDs even when vocabulary entries are reordered."""
+    vocab, _, mat_TF, doc_ids = construire_index({
+        7: {"common": 1},
+        0: {"alpha": 2, "common": 1, "rare": 1},
+        2: {"common": 1, "rare": 2},
+    })
+    reversed_vocab = dict(reversed(list(vocab.items())))
+
+    idf, mat_TFxIDF = calculer_tfidf(mat_TF, reversed_vocab)
+
+    assert idf == pytest.approx([1.0986122886681098, 0, 0.4054651081081644])
+    assert mat_TFxIDF.toarray()[0].tolist() == pytest.approx([2.1972245773362196, 0, 0.4054651081081644])
+    assert mat_TFxIDF.toarray()[1].tolist() == pytest.approx([0, 0, 0.8109302162163288])
+    assert mat_TFxIDF.toarray()[2].tolist() == [0, 0, 0]
+    assert doc_ids == [0, 2, 7]
+
+
+def test_tfidf_single_document() -> None:
+    """Every word in a one-document corpus has zero IDF."""
+    vocab, _, mat_TF, _ = construire_index({0: {"cat": 2, "dog": 1}})
+
+    idf, mat_TFxIDF = calculer_tfidf(mat_TF, vocab)
+
+    assert idf == [0, 0]
+    assert mat_TFxIDF.shape == (1, 2)
+    assert mat_TFxIDF.nnz == 0
+    assert mat_TF.toarray().tolist() == [[2, 1]]
+
+
+def test_tfidf_empty_corpus() -> None:
+    """An empty corpus produces empty weights without evaluating a logarithm."""
+    vocab, _, mat_TF, _ = construire_index({})
+
+    idf, mat_TFxIDF = calculer_tfidf(mat_TF, vocab)
+
+    assert idf == []
+    assert isinstance(mat_TFxIDF, csr_matrix)
+    assert mat_TFxIDF.shape == (0, 0)
+    assert mat_TFxIDF.nnz == 0
+
+
+def test_tfidf_empty_vocabulary() -> None:
+    """Documents without terms retain their rows in the weighted matrix."""
+    vocab, _, mat_TF, _ = construire_index({0: {}, 3: {}})
+
+    idf, mat_TFxIDF = calculer_tfidf(mat_TF, vocab)
+
+    assert idf == []
+    assert mat_TFxIDF.shape == (2, 0)
+    assert mat_TFxIDF.nnz == 0
+
+
+def test_tfidf_empty_document_row() -> None:
+    """An empty document contributes to N and keeps its zero row."""
+    vocab, _, mat_TF, _ = construire_index({0: {}, 1: {"cat": 2}})
+
+    idf, mat_TFxIDF = calculer_tfidf(mat_TF, vocab)
+
+    assert idf == pytest.approx([0.6931471805599453])
+    assert mat_TFxIDF.shape == (2, 1)
+    assert mat_TFxIDF.toarray()[0].tolist() == [0]
+    assert mat_TFxIDF.toarray()[1].tolist() == pytest.approx([1.3862943611198906])

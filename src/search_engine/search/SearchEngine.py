@@ -1,6 +1,7 @@
-"""Clean corpus texts and build word-frequency indexes."""
+"""Clean corpus texts and build frequency and TF-IDF matrices."""
 
 import re
+from math import log
 
 import pandas as pd
 from scipy.sparse import csr_matrix
@@ -104,6 +105,35 @@ def construire_index(
         vocab, orient="index", columns=["tf", "df"], dtype=int,
     )
     return vocab, freq, mat_TF, doc_ids
+
+
+def calculer_tfidf(
+    mat_TF: csr_matrix,
+    vocab: dict[str, dict[str, int]],
+) -> tuple[list[float], csr_matrix]:
+    """Return IDF weights and a sparse TF-IDF matrix.
+
+    Args:
+        mat_TF: Raw occurrence matrix returned by construire_index. Every row
+            counts as a document, including rows without terms.
+        vocab: Matching vocabulary with column IDs and positive document
+            frequencies in its id and df fields. An empty vocabulary is valid.
+
+    Returns:
+        A list of IDF weights in column order and a new CSR matrix named
+        mat_TFxIDF. Weights use the natural logarithm log(N / df), without
+        smoothing. Terms present in all N documents have zero weight.
+        The matrix preserves the input shape and row and column order;
+        explicit zeros are removed. With no terms, the weights are empty
+        and the result has zero columns. Both inputs are left unchanged.
+    """
+    document_count = mat_TF.shape[0]
+    idf = [0.0] * mat_TF.shape[1]
+    for metadata in vocab.values():
+        idf[metadata["id"]] = log(document_count / metadata["df"])  # log(N / df)
+    mat_TFxIDF = mat_TF.multiply(idf).tocsr()
+    mat_TFxIDF.eliminate_zeros()
+    return idf, mat_TFxIDF
 
 
 def get_word_frequencies(freq: pd.DataFrame, n: int) -> pd.DataFrame:
