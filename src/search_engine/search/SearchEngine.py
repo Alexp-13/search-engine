@@ -1,7 +1,7 @@
-"""Clean corpus texts and build frequency and TF-IDF matrices."""
+"""Analyze text and rank documents with TF-IDF cosine similarity."""
 
 import re
-from math import log
+from math import log, sqrt
 
 import pandas as pd
 from scipy.sparse import csr_matrix
@@ -19,6 +19,24 @@ def nettoyer_texte(texte: str) -> str:
         The cleaned text, retaining punctuation, digits, and other whitespace.
     """
     return texte.lower().replace("\n", " ")
+
+
+def compter_mots(texte: str) -> dict[str, int]:
+    """Count terms after lowercasing and splitting on separators.
+
+    Args:
+        texte: Document or query text. Whitespace, punctuation, and underscores
+            separate terms; Unicode letters and digits are retained.
+
+    Returns:
+        A dictionary of term occurrence counts. Empty pieces are ignored,
+        and text without terms produces an empty dictionary.
+    """
+    counts: dict[str, int] = {}
+    for word in re.split(r"[\W_]+", nettoyer_texte(texte)):
+        if word:
+            counts[word] = counts.get(word, 0) + 1
+    return counts
 
 
 def analyser_corpus(
@@ -44,10 +62,7 @@ def analyser_corpus(
     vocab: dict[str, dict[str, int]] = {}
     document_counts: dict[int, dict[str, int]] = {}
     for doc_id, document in sorted(corpus.documents.items()):
-        counts: dict[str, int] = {}
-        for word in re.split(r"[\W_]+", nettoyer_texte(document.texte)):
-            if word:
-                counts[word] = counts.get(word, 0) + 1
+        counts = compter_mots(document.texte)
         document_counts[doc_id] = counts
         for word, count in counts.items():
             if word not in vocab:
@@ -134,6 +149,113 @@ def calculer_tfidf(
     mat_TFxIDF = mat_TF.multiply(idf).tocsr()
     mat_TFxIDF.eliminate_zeros()
     return idf, mat_TFxIDF
+
+
+def vectoriser_requete(
+    mots_cles: str,
+    vocab: dict[str, dict[str, int]],
+    idf: list[float],
+) -> csr_matrix:
+    """Represent a query in the indexed documents' TF-IDF vocabulary.
+
+    Args:
+        mots_cles: Query text, cleaned and counted with compter_mots.
+        vocab: Vocabulary returned by construire_index, including column IDs.
+        idf: IDF weights returned by calculer_tfidf, in the same column order.
+
+    Returns:
+        A CSR row with one column per vocabulary term, containing query counts
+        multiplied by their IDF weights. Unknown terms are ignored and zero
+        weights are omitted. Empty or zero-weight queries produce a zero row.
+        Repeated terms retain their counts. The inputs are left unchanged.
+    """
+    columns: list[int] = []
+    values: list[float] = []
+    for word, count in compter_mots(mots_cles).items():
+        if word in vocab:
+            column = vocab[word]["id"]
+            value = count * idf[column]
+            if value:
+                columns.append(column)
+                values.append(value)
+    return csr_matrix(
+        (values, ([0] * len(columns), columns)),
+        shape=(1, len(vocab)), dtype=float,
+    )
+
+
+def calculer_normes(mat_TFxIDF: csr_matrix) -> list[float]:
+    """Return document vector lengths in matrix row order.
+
+    Args:
+        mat_TFxIDF: Document-by-term matrix whose row norms are needed.
+
+    Returns:
+        Euclidean norms, computed as the square root of each row's sum of
+        squared weights. Empty rows have norm zero. The matrix is unchanged,
+        and the norms can be reused while its weights remain unchanged.
+    """
+    squared_norms = mat_TFxIDF.multiply(mat_TFxIDF).sum(axis=1).A1
+    return [sqrt(value) for value in squared_norms]
+
+
+def calculer_similarites(
+    requete: csr_matrix,
+    mat_TFxIDF: csr_matrix,
+    normes_documents: list[float],
+) -> list[float]:
+    """Compute cosine similarities between a query and indexed documents.
+
+    Args:
+        requete: Weighted query row returned by vectoriser_requete.
+        mat_TFxIDF: Document matrix with the same term columns as the query.
+        normes_documents: One precomputed norm per document, in matrix row
+            order, returned by calculer_normes for this matrix.
+
+    Returns:
+        One cosine score per document in row order. A zero query norm or
+        document norm gives score zero. Only a document-sized product vector
+        is converted to a dense array; the document matrix stays sparse.
+        The inputs are left unchanged.
+    """
+    query_norm = sqrt(float(requete.multiply(requete).sum()))
+    if query_norm == 0:
+        return [0.0] * mat_TFxIDF.shape[0]
+    products = (mat_TFxIDF @ requete.T).toarray().ravel().tolist()
+    return [
+        product / (query_norm * document_norm) if document_norm else 0.0
+        for product, document_norm in zip(products, normes_documents)
+    ]
+
+
+def classer_documents(
+    scores: list[float],
+    doc_ids: list[int],
+    nombre_documents: int,
+) -> list[tuple[int, float]]:
+    """Select document IDs and scores in decreasing similarity order.
+
+    Args:
+        scores: One similarity score per document matrix row.
+        doc_ids: Original document ID corresponding to each score's row.
+        nombre_documents: Maximum number of results to return.
+
+    Returns:
+        Up to nombre_documents pairs of document ID and score. Only strictly
+        positive scores are included; exact ties use increasing document ID.
+        Scores are sorted without rounding. A zero limit or no positive
+        scores returns an empty list. The inputs are left unchanged.
+
+    Raises:
+        ValueError: If nombre_documents is negative.
+    """
+    if nombre_documents < 0:
+        raise ValueError("The number of documents must be nonnegative.")
+    classement = [
+        (doc_ids[row], score) for row, score in enumerate(scores) if score > 0
+    ]
+    classement.sort(key=lambda result: (-result[1], result[0]))
+    return classement[:nombre_documents]
 
 
 def get_word_frequencies(freq: pd.DataFrame, n: int) -> pd.DataFrame:

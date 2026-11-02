@@ -9,11 +9,15 @@ from scipy.sparse import csr_matrix
 from search_engine import Corpus, Document
 from search_engine.search.SearchEngine import (
     analyser_corpus,
+    calculer_normes,
+    calculer_similarites,
     calculer_tfidf,
+    classer_documents,
     construire_index,
     get_word_frequencies,
     nettoyer_texte,
     stats,
+    vectoriser_requete,
 )
 
 
@@ -320,3 +324,130 @@ def test_tfidf_empty_document_row() -> None:
     assert mat_TFxIDF.shape == (2, 1)
     assert mat_TFxIDF.toarray()[0].tolist() == [0]
     assert mat_TFxIDF.toarray()[1].tolist() == pytest.approx([1.3862943611198906])
+
+
+def test_vectoriser_requete(corpus: Corpus) -> None:
+    """Queries share document cleaning, count repetitions, and ignore unknown terms."""
+    text = "Cat,\nCAT dog"
+    corpus.add(Document("First", "Alice", datetime(2026, 1, 1), "", text))
+    corpus.add(Document("Second", "Bob", datetime(2026, 1, 1), "", "dog fish"))
+    _, _, counts = analyser_corpus(corpus)
+    vocab, _, mat_TF, _ = construire_index(counts)
+    original_vocab = {word: metadata.copy() for word, metadata in vocab.items()}
+    idf, _ = calculer_tfidf(mat_TF, vocab)
+    original_idf = idf.copy()
+    reversed_vocab = dict(reversed(list(vocab.items())))
+
+    query = vectoriser_requete("CAT,\ncat\tDOG fish unknown", reversed_vocab, idf)
+
+    assert isinstance(query, csr_matrix)
+    assert query.shape == (1, 3)
+    assert query.nnz == 2
+    assert query.toarray()[0].tolist() == pytest.approx([1.3862943611198906, 0, 0.6931471805599453])
+    assert vocab == original_vocab
+    assert idf == original_idf
+    assert corpus.documents[0].texte == text
+
+
+def test_cosine_similarities() -> None:
+    """Different document lengths are normalized and a zero row has score zero."""
+    matrix = csr_matrix([[3.0, 4.0], [0.0, 2.0], [0.0, 0.0]])
+    query = csr_matrix([[3.0, 4.0]])
+    norms = calculer_normes(matrix)
+
+    scores = calculer_similarites(query, matrix, norms)
+
+    assert norms == [5, 2, 0]
+    assert scores == pytest.approx([1, 0.8, 0])
+    assert matrix.toarray().tolist() == [[3, 4], [0, 2], [0, 0]]
+    assert query.toarray().tolist() == [[3, 4]]
+
+
+def test_ranked_search_with_document_ids(corpus: Corpus) -> None:
+    """The complete pipeline ranks real document IDs after filtering."""
+    corpus.add(Document("Fish", "Alice", datetime(2026, 1, 1), "", "dog fish " * 15))
+    corpus.add(Document("Short", "Bob", datetime(2026, 1, 1), "", "short"))
+    corpus.add(Document("Cat", "Alice", datetime(2026, 1, 1), "", "cat cat dog " * 10))
+    corpus.remove_short_documents()
+    _, _, counts = analyser_corpus(corpus)
+    vocab, _, mat_TF, doc_ids = construire_index(counts)
+    idf, mat_TFxIDF = calculer_tfidf(mat_TF, vocab)
+    norms = calculer_normes(mat_TFxIDF)
+
+    query = vectoriser_requete("cat cat fish", vocab, idf)
+    scores = calculer_similarites(query, mat_TFxIDF, norms)
+    results = classer_documents(scores, doc_ids, 2)
+
+    assert doc_ids == [0, 2]
+    assert scores == pytest.approx([0.4472135954999579, 0.8944271909999159])
+    assert [doc_id for doc_id, _ in results] == [2, 0]
+    assert corpus.documents[results[0][0]].titre == "Cat"
+
+
+@pytest.mark.parametrize("text", ["", " \n\t...", "unknown", "DOG"])
+def test_zero_query_scores(text: str) -> None:
+    """Empty, unknown, and zero-IDF queries produce no ranked documents."""
+    vocab, _, mat_TF, doc_ids = construire_index(
+        {0: {"cat": 2, "dog": 1}, 1: {"dog": 1, "fish": 1}},
+    )
+    idf, mat_TFxIDF = calculer_tfidf(mat_TF, vocab)
+    norms = calculer_normes(mat_TFxIDF)
+
+    query = vectoriser_requete(text, vocab, idf)
+    scores = calculer_similarites(query, mat_TFxIDF, norms)
+
+    assert query.shape == (1, 3)
+    assert query.nnz == 0
+    assert scores == [0, 0]
+    assert classer_documents(scores, doc_ids, 10) == []
+
+
+@pytest.mark.parametrize(
+    ("limit", "expected"),
+    [
+        (1, [(2, 0.8)]),
+        (2, [(2, 0.8), (7, 0.8)]),
+        (10, [(2, 0.8), (7, 0.8), (9, 0.5)]),
+        (0, []),
+    ],
+)
+def test_ranking_limits_and_ties(limit: int, expected: list[tuple[int, float]]) -> None:
+    """Positive scores are limited and exact ties use ascending original IDs."""
+    scores = [0.5, 0.8, 0.8, 0.0]
+    doc_ids = [9, 7, 2, 4]
+
+    assert classer_documents(scores, doc_ids, limit) == expected
+    assert scores == [0.5, 0.8, 0.8, 0.0]
+    assert doc_ids == [9, 7, 2, 4]
+
+
+def test_ranking_invalid_limit_and_empty_results() -> None:
+    """Negative limits are rejected and missing positive scores give no results."""
+    with pytest.raises(ValueError):
+        classer_documents([0.5], [0], -1)
+    assert classer_documents([], [], 5) == []
+    assert classer_documents([0, 0], [2, 4], 5) == []
+
+
+def test_ranking_without_rounding() -> None:
+    """Close but distinct scores keep their numerical order before display."""
+    assert classer_documents([0.5, 0.500000000001], [1, 9], 2) == [
+        (9, 0.500000000001), (1, 0.5),
+    ]
+
+
+@pytest.mark.parametrize("counts", [{}, {0: {}, 2: {}}, {0: {"cat": 2}}])
+def test_search_without_weighted_terms(counts: dict[int, dict[str, int]]) -> None:
+    """Empty indexes and corpora with only zero-IDF terms remain searchable."""
+    vocab, _, mat_TF, doc_ids = construire_index(counts)
+    idf, mat_TFxIDF = calculer_tfidf(mat_TF, vocab)
+    norms = calculer_normes(mat_TFxIDF)
+
+    query = vectoriser_requete("cat", vocab, idf)
+    scores = calculer_similarites(query, mat_TFxIDF, norms)
+
+    assert query.shape == (1, len(vocab))
+    assert query.nnz == 0
+    assert norms == [0] * len(doc_ids)
+    assert scores == [0] * len(doc_ids)
+    assert classer_documents(scores, doc_ids, 5) == []
