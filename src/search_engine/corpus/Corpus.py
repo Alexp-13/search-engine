@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import ClassVar
@@ -176,6 +177,23 @@ class Corpus:
             self._document_bounds = bounds
         return self._text_cache
 
+    def _find_matches(
+        self, pattern: re.Pattern[str],
+    ) -> Iterator[tuple[re.Match[str], int, int]]:
+        """Find regex matches within cached document boundaries.
+
+        Args:
+            pattern: Compiled expression to search for.
+
+        Yields:
+            A match and the start and end positions of its containing document,
+            ordered by document ID and occurrence position.
+        """
+        text = self.get_text()
+        for start, end in self._document_bounds:
+            for match in pattern.finditer(text, start, end):
+                yield match, start, end
+
     def search(self, mot_cle: str) -> list[str]:
         """Return passages containing a literal keyword, ignoring case.
 
@@ -193,15 +211,51 @@ class Corpus:
         """
         if not mot_cle:
             return []
-        text = self.get_text()
         pattern = re.compile(re.escape(mot_cle), re.IGNORECASE)
         passages: list[str] = []
-        for start, end in self._document_bounds:
-            for match in pattern.finditer(text, start, end):
-                left = max(start, match.start() - 30)
-                right = min(end, match.end() + 30)
-                passages.append(text[left:right])
+        for match, start, end in self._find_matches(pattern):
+            left = max(start, match.start() - 30)
+            right = min(end, match.end() + 30)
+            passages.append(match.string[left:right])
         return passages
+
+    def concorde(self, expression: str, taille_contexte: int) -> pd.DataFrame:
+        """Return a concordance table for a case-insensitive regex.
+
+        Contexts preserve the original text and stay within the document
+        containing each match. Valid zero-width matches are included.
+
+        Args:
+            expression: Regular expression to search for.
+            taille_contexte: Maximum number of characters on each side.
+                Zero returns only the matched text, with empty contexts.
+
+        Returns:
+            A DataFrame with contexte gauche, motif trouvé, and contexte droit
+            columns, ordered by document ID and occurrence position.
+            Empty expressions and absent matches return an empty table with
+            the same columns.
+
+        Raises:
+            ValueError: If taille_contexte is negative.
+            re.error: If expression is not a valid regular expression.
+        """
+        if taille_contexte < 0:
+            raise ValueError("Context size must be nonnegative.")
+        rows: list[tuple[str, str, str]] = []
+        if expression:
+            pattern = re.compile(expression, re.IGNORECASE)
+            for match, start, end in self._find_matches(pattern):
+                left = max(start, match.start() - taille_contexte) # stop the context from going beyond the document's start
+                right = min(end, match.end() + taille_contexte) # stop the context from going beyond the document's end
+                rows.append((
+                    match.string[left:match.start()],
+                    match.group(),
+                    match.string[match.end():right],
+                ))
+        return pd.DataFrame(
+            rows, columns=["contexte gauche", "motif trouvé", "contexte droit"],
+        )
 
     def show_by_date(self, n: int = 10) -> None:
         """Print up to n documents, newest first, with IDs breaking date ties.

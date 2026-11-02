@@ -1,9 +1,11 @@
 """Test corpus registration, sorting, statistics, and JSONL persistence."""
 
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from search_engine.corpus import Corpus
@@ -278,3 +280,96 @@ def test_load_empty_file_clears_text_cache(corpus: Corpus, tmp_path: Path) -> No
 
     assert corpus.get_text() == ""
     assert corpus.search("target") == []
+
+
+def test_concorde_multiple_matches(corpus: Corpus) -> None:
+    """Regex alternatives produce the expected rows with original case."""
+    corpus.add(Document("Example", "Alice", datetime(2026, 1, 1), "", "ab CAT cd dog ef"))
+
+    table = corpus.concorde("cat|dog", 3)
+
+    assert isinstance(table, pd.DataFrame)
+    assert list(table.columns) == ["contexte gauche", "motif trouvé", "contexte droit"]
+    assert table.values.tolist() == [
+        ["ab ", "CAT", " cd"],
+        ["cd ", "dog", " ef"],
+    ]
+    assert corpus.search("cat|dog") == []
+
+
+def test_concorde_context_size(corpus: Corpus) -> None:
+    """The requested context length applies to both sides of a match."""
+    corpus.add(Document("Example", "Alice", datetime(2026, 1, 1), "", "abc cat def"))
+
+    assert corpus.concorde("cat", 1).values.tolist() == [[" ", "cat", " "]]
+    assert corpus.concorde("cat", 4).values.tolist() == [["abc ", "cat", " def"]]
+
+
+def test_concorde_stays_within_documents(corpus: Corpus) -> None:
+    """Long contexts and regex matches cannot cross into another document."""
+    corpus.add(Document("First", "Alice", datetime(2026, 1, 1), "", "cat and dog"))
+    corpus.add(Document("Second", "Bob", datetime(2026, 1, 1), "", "cat"))
+
+    assert corpus.concorde("cat|dog", 50).values.tolist() == [
+        ["", "cat", " and dog"],
+        ["cat and ", "dog", ""],
+        ["", "cat", ""],
+    ]
+    assert corpus.concorde(r"dog\s+cat", 10).empty
+
+
+def test_concorde_zero_context(corpus: Corpus) -> None:
+    """Zero context keeps the matched text between two empty strings."""
+    corpus.add(Document("Example", "Alice", datetime(2026, 1, 1), "", "Before CAT after"))
+
+    assert corpus.concorde("cat", 0).values.tolist() == [["", "CAT", ""]]
+
+
+def test_concorde_empty_results(corpus: Corpus) -> None:
+    """Empty corpora, expressions, and absent matches keep the table schema."""
+    empty_corpus = corpus.concorde("cat", 3)
+    assert empty_corpus.empty
+    assert list(empty_corpus.columns) == ["contexte gauche", "motif trouvé", "contexte droit"]
+
+    corpus.add(Document("Example", "Alice", datetime(2026, 1, 1), "", "dog"))
+
+    assert corpus.concorde("cat", 3).empty
+    empty_expression = corpus.concorde("", 3)
+    assert empty_expression.empty
+    assert list(empty_expression.columns) == list(empty_corpus.columns)
+
+
+def test_concorde_zero_width_regex(corpus: Corpus) -> None:
+    """A valid zero-width regex is distinct from an empty expression."""
+    corpus.add(Document("Example", "Alice", datetime(2026, 1, 1), "", "cat"))
+
+    assert corpus.concorde(r"(?=cat)", 3).values.tolist() == [["", "", "cat"]]
+    assert corpus.concorde("", 3).empty
+
+
+def test_concorde_negative_context(corpus: Corpus) -> None:
+    """Negative context lengths are rejected."""
+    with pytest.raises(ValueError):
+        corpus.concorde("cat", -1)
+
+
+def test_concorde_invalid_regex(corpus: Corpus) -> None:
+    """Malformed regex expressions retain their regex error."""
+    with pytest.raises(re.error):
+        corpus.concorde("[", 3)
+
+
+def test_concorde_reuses_text_cache(corpus: Corpus) -> None:
+    """Concordances share the text cache and reflect later additions."""
+    corpus.add(Document("First", "Alice", datetime(2026, 1, 1), "", "cat here"))
+    corpus.add(Document("Second", "Bob", datetime(2026, 1, 1), "", "dog there"))
+    text = corpus.get_text()
+
+    assert len(corpus.concorde("cat|dog", 3)) == 2
+    assert corpus.get_text() is text
+
+    corpus.add(Document("Third", "Eve", datetime(2026, 1, 1), "", "new cat"))
+    table = corpus.concorde("cat", 4)
+
+    assert len(table) == 2
+    assert table.iloc[-1].tolist() == ["new ", "cat", ""]
