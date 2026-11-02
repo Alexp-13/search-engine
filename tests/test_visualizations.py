@@ -3,10 +3,16 @@
 from datetime import datetime
 
 import pandas as pd
+import pytest
 from matplotlib.figure import Figure
 
 from search_engine import Corpus, Document
-from search_engine.search.SearchEngine import analyser_corpus, get_word_frequencies
+from search_engine.search.SearchEngine import (
+    analyser_corpus,
+    calculer_tfidf,
+    construire_index,
+    get_word_frequencies,
+)
 from search_engine.visualizations import plot_word_frequencies
 
 
@@ -66,3 +72,61 @@ def test_plot_empty_table() -> None:
     assert figure.axes[0].get_yticklabels() == []
     assert table.empty
     assert list(table.columns) == ["tf", "df"]
+
+
+@pytest.mark.parametrize(
+    ("n", "expected_words", "expected_values"),
+    [
+        (2, ["cat", "dog"], [2, 2]),
+        (10, ["cat", "dog", "fish"], [2, 2, 1]),
+        (0, [], []),
+    ],
+)
+def test_plot_after_tfidf(
+    corpus: Corpus,
+    n: int,
+    expected_words: list[str],
+    expected_values: list[int],
+) -> None:
+    """Charts retain occurrence counts after weighting, including zero-IDF terms."""
+    corpus.add(Document("First", "Alice", datetime(2026, 1, 1), "", "dog cat cat"))
+    corpus.add(Document("Second", "Bob", datetime(2026, 1, 1), "", "fish dog"))
+    _, _, document_counts = analyser_corpus(corpus)
+    vocab, freq, mat_TF, _ = construire_index(document_counts)
+    original_freq = freq.copy()
+    idf, mat_TFxIDF = calculer_tfidf(mat_TF, vocab)
+    table = get_word_frequencies(freq, n)
+    original_table = table.copy()
+
+    figure = plot_word_frequencies(table)
+
+    assert idf[vocab["dog"]["id"]] == 0
+    assert mat_TFxIDF[:, vocab["dog"]["id"]].nnz == 0
+    assert isinstance(figure, Figure)
+    axes = figure.axes[0]
+    assert len(axes.patches) == len(expected_words)
+    assert [label.get_text() for label in axes.get_yticklabels()] == expected_words
+    assert [bar.get_width() for bar in axes.patches] == expected_values
+    assert axes.yaxis_inverted()
+    pd.testing.assert_frame_equal(freq, original_freq)
+    pd.testing.assert_frame_equal(table, original_table)
+
+
+@pytest.mark.parametrize("text", [None, "... ___"])
+def test_plot_without_terms_after_tfidf(corpus: Corpus, text: str | None) -> None:
+    """Empty vocabularies still produce a Figure after the full analysis pipeline."""
+    if text is not None:
+        corpus.add(Document("Empty", "Alice", datetime(2026, 1, 1), "", text))
+    _, _, document_counts = analyser_corpus(corpus)
+    vocab, freq, mat_TF, _ = construire_index(document_counts)
+    idf, mat_TFxIDF = calculer_tfidf(mat_TF, vocab)
+
+    figure = plot_word_frequencies(get_word_frequencies(freq, 10))
+
+    assert idf == []
+    assert mat_TFxIDF.shape == (len(corpus), 0)
+    assert isinstance(figure, Figure)
+    assert len(figure.axes[0].patches) == 0
+    assert figure.axes[0].get_yticklabels() == []
+    assert freq.empty
+    assert list(freq.columns) == ["tf", "df"]
