@@ -5,6 +5,7 @@ from math import log, sqrt
 
 import pandas as pd
 from scipy.sparse import csr_matrix
+from tqdm import tqdm
 
 from ..corpus import Corpus
 
@@ -28,12 +29,14 @@ class SearchEngine:
         normes_documents: Precomputed document norms in matrix row order.
     """
 
-    def __init__(self, corpus: Corpus) -> None:
+    def __init__(self, corpus: Corpus, *, show_progress: bool = False) -> None:
         """Build vocabulary, matrices, weights, and norms from corpus documents.
 
         Args:
             corpus: Loaded and filtered collection to index. Its documents
                 are read once for term counts and are left unchanged.
+            show_progress: Display document progress while filling the sparse
+                term-frequency matrix coordinates. Disabled by default.
         """
         self.corpus = corpus
         self.document_counts = {
@@ -41,7 +44,7 @@ class SearchEngine:
             for doc_id, document in sorted(corpus.documents.items())
         }
         self.vocab, self.freq, self.mat_TF, self.doc_ids = self.construire_index(
-            self.document_counts,
+            self.document_counts, show_progress=show_progress,
         )
         self.idf, self.mat_TFxIDF = self.calculer_tfidf(self.mat_TF, self.vocab)
         self.normes_documents = self.calculer_normes(self.mat_TFxIDF)
@@ -79,6 +82,7 @@ class SearchEngine:
     @staticmethod
     def construire_index(
         document_counts: dict[int, dict[str, int]],
+        *, show_progress: bool = False,
     ) -> tuple[dict[str, dict[str, int]], pd.DataFrame, csr_matrix, list[int]]:
         """Build an alphabetical vocabulary and a sparse term-frequency matrix.
 
@@ -87,6 +91,8 @@ class SearchEngine:
                 original document ID. Each inner dictionary contains positive
                 occurrence counts, or is empty for a document without terms.
                 The input dictionaries are left unchanged.
+            show_progress: Display document progress while filling matrix
+                coordinates. Disabled by default.
 
         Returns:
             A tuple containing vocab, freq, mat_TF, and doc_ids. Vocabulary entries
@@ -104,7 +110,9 @@ class SearchEngine:
         rows: list[int] = []
         columns: list[int] = []
         values: list[int] = []
-        for row, doc_id in enumerate(doc_ids):
+        for row, doc_id in enumerate(tqdm(
+            doc_ids, desc="Indexing", unit="document", disable=not show_progress,
+        )):
             for word, count in document_counts[doc_id].items():
                 rows.append(row)
                 columns.append(vocab[word]["id"])

@@ -57,6 +57,25 @@ def test_analyser_corpus_delimiters(corpus: Corpus) -> None:
     assert freq["df"].to_dict() == expected
 
 
+def test_index_progress(corpus: Corpus, capsys: pytest.CaptureFixture[str]) -> None:
+    """Show document progress without changing the matrices or search results."""
+    corpus.add(Document("First", "Alice", datetime(2026, 1, 1), "", "Cat cat dog"))
+    corpus.add(Document("Second", "Bob", datetime(2026, 1, 1), "", "dog fish"))
+
+    quiet = SearchEngine(corpus)
+    output = capsys.readouterr()
+    assert output.out == output.err == ""
+
+    visible = SearchEngine(corpus, show_progress=True)
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert "Indexing" in output.err
+    assert "2/2" in output.err
+    assert (quiet.mat_TF != visible.mat_TF).nnz == 0
+    assert (quiet.mat_TFxIDF != visible.mat_TFxIDF).nnz == 0
+    pd.testing.assert_frame_equal(quiet.search("cat fish", 2), visible.search("cat fish", 2))
+
+
 def test_empty_statistics(corpus: Corpus) -> None:
     """Empty corpora and documents without terms retain the table columns."""
     engine = SearchEngine(corpus)
