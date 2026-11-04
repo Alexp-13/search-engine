@@ -7,10 +7,12 @@ from pathlib import Path
 import pandas as pd
 import pytest
 import streamlit as st
+from matplotlib.figure import Figure
 from streamlit.testing.v1 import AppTest
 
 from app import extraire_passage
 from search_engine import Corpus, Document, SearchEngine
+from search_engine.visualizations import plot_word_frequencies
 
 APP_PATH = Path(__file__).resolve().parents[1] / "app.py"
 
@@ -108,3 +110,22 @@ def test_extraire_passage() -> None:
     assert "bobcat" not in passage
     assert passage.startswith("...") and passage.endswith("...")
     assert extraire_passage("A short text", "unknown") == "A short text"
+
+
+def test_collapsible_chart(app_corpus: Corpus, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Render the existing frequency chart inside an initially collapsed section."""
+    tables = []
+
+    def record_chart(table: pd.DataFrame) -> Figure:
+        """Record the displayed statistics and return the existing figure."""
+        tables.append(table.copy())
+        return plot_word_frequencies(table)
+
+    monkeypatch.setattr("search_engine.visualizations.plot_word_frequencies", record_chart)
+    app = AppTest.from_file(APP_PATH, default_timeout=10).run()
+
+    assert not app.exception
+    assert app.expander[0].label == "Graphique des mots les plus fréquents"
+    assert not app.expander[0].proto.expanded
+    assert len(app.image) == 1
+    assert tables[0]["tf"].to_dict() == {"cat": 2, "dog": 2, "fish": 1}

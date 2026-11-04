@@ -8,6 +8,7 @@ from pathlib import Path
 import streamlit as st
 
 from search_engine import Corpus, Document, SearchEngine
+from search_engine.visualizations import plot_word_frequencies
 
 
 @st.cache_resource(show_spinner="Chargement du corpus...")
@@ -92,7 +93,7 @@ def afficher_resultat(document: Document, score: float, mots_cles: str) -> None:
 
 
 def main() -> None:
-    """Render search controls and the latest results for the current session."""
+    """Render search controls, results, and a collapsible word-frequency chart."""
     st.title("Moteur de recherche")
     try:
         moteur = charger_moteur()
@@ -108,11 +109,17 @@ def main() -> None:
     st.button("Rechercher", on_click=clique_bouton)
 
     sortie = st.empty()
-    if "resultats" in st.session_state:
-        resultats = st.session_state["resultats"]
-        with sortie.container():
+    resultats = st.session_state.get("resultats")
+    with sortie.container():
+        if resultats is not None:
             with st.expander("Tableau des résultats"):
                 st.dataframe(resultats, hide_index=True)
+
+        with st.expander("Graphique des mots les plus fréquents", expanded=False):
+            frequences = SearchEngine.get_word_frequencies(moteur.freq, 10)
+            st.pyplot(plot_word_frequencies(frequences))
+
+        if resultats is not None:
             if resultats.empty:
                 st.info("Aucun résultat.")
             else:
