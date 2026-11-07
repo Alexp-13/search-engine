@@ -12,6 +12,7 @@ from streamlit.testing.v1 import AppTest
 
 from app import extraire_passage
 from search_engine import Corpus, Document, SearchEngine
+from search_engine.generation import GeneratedAnswer, GenerationError
 from search_engine.visualizations import plot_word_frequencies
 
 APP_PATH = Path(__file__).resolve().parents[1] / "app.py"
@@ -129,3 +130,38 @@ def test_collapsible_chart(app_corpus: Corpus, monkeypatch: pytest.MonkeyPatch) 
     assert not app.expander[0].proto.expanded
     assert len(app.image) == 1
     assert tables[0]["tf"].to_dict() == {"cat": 2, "dog": 2, "fish": 1}
+
+
+def test_generation_button(app_corpus: Corpus, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Generate only on demand from the last search, then clear stale answers."""
+    calls = []
+
+    def generate(query, documents, **kwargs):
+        """Return a provider-labelled answer, then simulate exhausted quota."""
+        calls.append((query, [doc.titre for doc in documents]))
+        if len(calls) == 2:
+            raise GenerationError("Quota atteint.")
+        return GeneratedAnswer("Summary [1].", "Groq", "test-model")
+
+    monkeypatch.setenv("GEMINI_API_Key", "test-key")
+    monkeypatch.setenv("GROQ_API_Key", "test-groq-key")
+    monkeypatch.setattr("search_engine.generation.analyser_documents", generate)
+    app = AppTest.from_file(APP_PATH, default_timeout=10).run()
+    app.text_input[0].set_value("cat fish")
+    app.button[0].click().run()
+    assert calls == []
+
+    app.text_input[0].set_value("fish").run()
+    app.button[1].click().run()
+    assert not app.exception
+    assert calls == [("cat fish", ["Cat", "Fish"])]
+    assert app.markdown[0].value == "Summary [1]."
+    assert app.caption[0].value == "Groq (test-model)"
+    app.run()
+    assert len(calls) == 1
+
+    app.button[1].click().run()
+    assert not app.exception and app.error[0].value == "Quota atteint."
+    assert all(item.value != "Summary [1]." for item in app.markdown)
+    app.button[0].click().run()
+    assert not app.exception and not app.error

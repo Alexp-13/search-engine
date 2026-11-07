@@ -1,21 +1,11 @@
 # Search Engine
 
-A search engine built from scratch in Python for indexing and retrieving documents from Reddit and arXiv.
-
-This project is developed as part of an M1 programming course. It focuses on implementing the core information retrieval pipeline without relying on ready-made search engine libraries.
-
-## Current status
-
-Work in progress.
-
-## Data sources
-
-- Reddit, using PRAW
-- arXiv, using the arXiv Python API
+A Python search engine for Reddit and arXiv documents, with TF-IDF search,
+a Streamlit interface, and document-based AI answers.
 
 ## Setup
 
-The project uses Python 3.13 and [uv](https://docs.astral.sh/uv/) for dependency management.
+Requires Python 3.13+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
 git clone https://github.com/Alexp-13/search-engine.git
@@ -23,20 +13,50 @@ cd search-engine
 uv sync
 ```
 
-Create a local .env file based on .env.example:
+## Versions
+
+`v1`, `v2`, and `v3` are Git tags.
+
+### Version 1
 
 ```bash
-cp .env.example .env
+git switch --detach v1
+uv sync
+uv run main.py
 ```
 
-Then configure your Reddit API credentials.
+Explore documents and authors through the terminal menu.
 
-## Project structure
+### Version 2
 
+```bash
+git switch --detach v2
+uv sync
+uv run main.py
 ```
-src/search_engine/   Core Python package
-scripts/             Utility and data acquisition scripts
-data/                Local corpus data
-docs/                Architecture and design documentation
-tests/               Tests
+
+Choose option **6** to search. V1 and V2 load `data/corpus.demo.jsonl` by default.
+
+### Version 3
+
+```bash
+git switch --detach v3
+uv sync
+uv run streamlit run app.py
 ```
+
+Open the URL shown in the terminal. The default corpus is `data/corpus.100.jsonl`.
+To use another corpus, stop the app with `Ctrl+C` and launch:
+
+```bash
+CORPUS_PATH=data/corpus.1000.jsonl uv run streamlit run app.py
+CORPUS_PATH=data/corpus.10000.jsonl uv run streamlit run app.py
+```
+
+For AI answers, configure `GROQ_API_Key` in `.env` and optionally
+`GEMINI_API_Key` as fallback; see `.env.example`. Search works without API keys.
+After searching, click **Analyser les résultats**.
+
+Example question for the default corpus:
+
+> How many questions does ScienceVision contain, how many are assigned to each domain ?

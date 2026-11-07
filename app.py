@@ -6,8 +6,12 @@ from html import escape
 from pathlib import Path
 
 import streamlit as st
+from dotenv import load_dotenv
 
 from search_engine import Corpus, Document, SearchEngine
+from search_engine.generation import (
+    DEFAULT_GROQ_MODEL, DEFAULT_MODEL, GenerationError, analyser_documents,
+)
 from search_engine.visualizations import plot_word_frequencies
 
 
@@ -40,6 +44,47 @@ def clique_bouton() -> None:
     nombre_documents = st.session_state["nombre_documents"]
     st.session_state["resultats"] = charger_moteur().search(mots_cles, nombre_documents)
     st.session_state["derniere_recherche"] = (mots_cles, nombre_documents)
+    for key in (
+        "reponse_generation", "erreur_generation", "sources_generation", "fournisseur_generation",
+    ):
+        st.session_state.pop(key, None)
+
+
+def analyser_resultats() -> None:
+    """Generate an answer from the last search's first five documents.
+
+    Read provider keys from the local environment without requiring a specific
+    letter case. GEMINI_MODEL and GROQ_MODEL optionally select models. Keep
+    the answer or a readable error in the current session. Each click tries
+    Groq once and Gemini once if needed; changing widgets does not generate text.
+    """
+    for key in (
+        "reponse_generation", "erreur_generation", "sources_generation", "fournisseur_generation",
+    ):
+        st.session_state.pop(key, None)
+    resultats = st.session_state["resultats"]
+    moteur = charger_moteur()
+    documents = [moteur.corpus.documents[doc_id] for doc_id in resultats["id"].head(5)]
+    requete = st.session_state["derniere_recherche"][0]
+    load_dotenv(Path(__file__).resolve().parent / ".env")
+    keys = {
+        name.casefold(): value for name, value in os.environ.items()
+        if name.casefold() in ("gemini_api_key", "groq_api_key")
+    }
+    try:
+        with st.spinner("Analyse des documents..."):
+            reponse = analyser_documents(
+                requete, documents, gemini_key=keys.get("gemini_api_key", ""),
+                groq_key=keys.get("groq_api_key", ""),
+                gemini_model=os.getenv("GEMINI_MODEL", DEFAULT_MODEL),
+                groq_model=os.getenv("GROQ_MODEL", DEFAULT_GROQ_MODEL),
+            )
+    except (ValueError, GenerationError) as error:
+        st.session_state["erreur_generation"] = str(error)
+    else:
+        st.session_state["reponse_generation"] = reponse.texte
+        st.session_state["fournisseur_generation"] = f"{reponse.fournisseur} ({reponse.modele})"
+        st.session_state["sources_generation"] = [document.url for document in documents]
 
 
 def extraire_passage(texte: str, mots_cles: str) -> str:
@@ -123,6 +168,14 @@ def main() -> None:
             if resultats.empty:
                 st.info("Aucun résultat.")
             else:
+                st.button("Analyser les résultats", on_click=analyser_resultats)
+                if "erreur_generation" in st.session_state:
+                    st.error(st.session_state["erreur_generation"])
+                if "reponse_generation" in st.session_state:
+                    st.caption(st.session_state["fournisseur_generation"])
+                    st.markdown(st.session_state["reponse_generation"])
+                    for number, url in enumerate(st.session_state["sources_generation"], start=1):
+                        st.caption(f"Source [{number}] : {url}")
                 mots_cles = st.session_state["derniere_recherche"][0]
                 for resultat in resultats.itertuples(index=False):
                     afficher_resultat(
