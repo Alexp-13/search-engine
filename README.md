@@ -3,6 +3,11 @@
 A Python search engine for Reddit and arXiv documents, with TF-IDF search,
 a Streamlit interface, and document-based AI answers.
 
+The Streamlit application is deployed online:
+
+- [Application](https://perez-alexandre.dev/search/)
+- [Technical documentation](https://perez-alexandre.dev/search/docs/)
+
 ## Setup
 
 Requires Python 3.13+ and [uv](https://docs.astral.sh/uv/).
@@ -11,6 +16,12 @@ Requires Python 3.13+ and [uv](https://docs.astral.sh/uv/).
 git clone https://github.com/Alexp-13/search-engine.git
 cd search-engine
 uv sync
+```
+
+For collection or AI answers, create `.env` and fill in the required keys:
+
+```bash
+cp -n .env.example .env
 ```
 
 ## Versions
@@ -60,3 +71,49 @@ After searching, click **Analyser les résultats**.
 Example question for the default corpus:
 
 > How many questions does ScienceVision contain, how many are assigned to each domain ?
+
+Return to the latest development version:
+
+```bash
+git switch main
+uv sync
+```
+
+## Command-line usage
+
+Load another corpus, or print its statistics and exit:
+
+```bash
+uv run main.py --corpus data/corpus.1000.jsonl
+uv run main.py --corpus data/corpus.1000.jsonl --summary
+```
+
+Optional collection of up to 25 publications per source. Configure the Reddit
+credentials in `.env` first:
+
+```bash
+uv run main.py --collect \
+    --query "neural networks" \
+    --subreddit learnmachinelearning \
+    --limit 25 \
+    --corpus data/corpus.local.jsonl
+```
+
+## Tests and notebook
+
+Run these commands from the repository root on `main`:
+
+```bash
+uv run pytest -q
+uv run jupyter execute search-engine.ipynb
+```
+
+## Generate documentation
+
+Generate HTML documentation from the docstrings into `docs/api/`:
+
+```bash
+uv run python -m pdoc search_engine main app \
+    --docformat google \
+    -o docs/api
+```
