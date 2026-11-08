@@ -2,9 +2,11 @@
 
 import os
 import re
+from collections import Counter
 from html import escape
 from pathlib import Path
 
+import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
 
@@ -161,7 +163,33 @@ def main() -> None:
     with sortie.container():
         if resultats is not None:
             with st.expander("Tableau des résultats"):
-                st.dataframe(resultats, hide_index=True)
+                tableau = resultats.copy()
+                tableau["coauthors"] = [
+                    moteur.corpus.documents[doc_id].to_dict()["coauthors"]
+                    for doc_id in resultats["id"]
+                ]
+                st.dataframe(tableau, hide_index=True)
+
+        with st.expander("Statistiques du corpus", expanded=False):
+            corpus = moteur.corpus
+            st.text(f"Corpus : {corpus.nom}")
+            documents, auteurs, mots = st.columns(3)
+            documents.metric("Documents", len(corpus))
+            auteurs.metric("Auteurs", len(corpus.authors))
+            mots.metric("Mots distincts", len(moteur.freq))
+            sources = Counter(document.getType() for document in corpus.documents.values())
+            st.dataframe(
+                pd.DataFrame(sorted(sources.items()), columns=["origine", "documents"]),
+                hide_index=True,
+            )
+            st.dataframe(
+                pd.DataFrame(
+                    corpus.document_stats(),
+                    columns=["doc_id", "word_count", "sentence_count"],
+                ),
+                hide_index=True,
+            )
+            st.dataframe(SearchEngine.get_word_frequencies(moteur.freq, 10))
 
         with st.expander("Graphique des mots les plus fréquents", expanded=False):
             frequences = SearchEngine.get_word_frequencies(moteur.freq, 10)

@@ -11,7 +11,8 @@ from matplotlib.figure import Figure
 from streamlit.testing.v1 import AppTest
 
 from app import extraire_passage
-from search_engine import Corpus, Document, SearchEngine
+from search_engine import Corpus, SearchEngine
+from search_engine.documents import ArxivDocument, RedditDocument
 from search_engine.generation import GeneratedAnswer, GenerationError
 from search_engine.visualizations import plot_word_frequencies
 
@@ -23,8 +24,14 @@ def app_corpus(
     corpus: Corpus, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> Iterator[Corpus]:
     """Configure a saved two-document corpus and isolate the resource cache."""
-    corpus.add(Document("Cat", "Alice", datetime(2026, 1, 1), "https://example.test/cat", "cat cat dog"))
-    corpus.add(Document("Fish", "Bob", datetime(2026, 1, 1), "https://example.test/fish", "dog fish"))
+    corpus.add(RedditDocument(
+        "Cat", "Alice", datetime(2026, 1, 1), "https://example.test/cat", "cat cat dog",
+        nb_comments=3,
+    ))
+    corpus.add(ArxivDocument(
+        "Fish", "Bob", datetime(2026, 1, 1), "https://example.test/fish", "dog fish",
+        coauthors=["Carol"],
+    ))
     path = tmp_path / "corpus.jsonl"
     corpus.save(path)
     monkeypatch.setenv("CORPUS_PATH", str(path))
@@ -48,14 +55,17 @@ def test_search_and_reuse_index(app_corpus: Corpus, monkeypatch: pytest.MonkeyPa
     app = AppTest.from_file(APP_PATH, default_timeout=10).run()
     assert not app.exception
     assert app.title[0].value == "Moteur de recherche"
-    assert not app.dataframe
+    assert all(expander.label != "Tableau des résultats" for expander in app.expander)
 
     app.text_input[0].set_value("cat fish")
     app.slider[0].set_value(1)
     app.button[0].click().run()
     assert not app.exception
+    tableau = app.expander[0].dataframe[0].value
+    assert list(tableau.columns) == ["id", "titre", "url", "score", "coauthors"]
+    assert list(tableau.iloc[0]["coauthors"]) == []
     pd.testing.assert_frame_equal(
-        app.dataframe[0].value, expected.search("cat fish", 1), check_dtype=False,
+        tableau.drop(columns="coauthors"), expected.search("cat fish", 1), check_dtype=False,
     )
     assert app.expander[0].label == "Tableau des résultats"
     assert len(app.markdown) == 1
@@ -68,13 +78,16 @@ def test_search_and_reuse_index(app_corpus: Corpus, monkeypatch: pytest.MonkeyPa
     app.text_input[0].set_value("fish").run()
     assert app.markdown[0].value == first_result
     pd.testing.assert_frame_equal(
-        app.dataframe[0].value, expected.search("cat fish", 1), check_dtype=False,
+        app.expander[0].dataframe[0].value.drop(columns="coauthors"),
+        expected.search("cat fish", 1), check_dtype=False,
     )
     app.button[0].click().run()
     assert not app.exception
-    assert len(app.dataframe) == 1
+    assert len(app.expander[0].dataframe) == 1
+    assert list(app.expander[0].dataframe[0].value.iloc[0]["coauthors"]) == ["Carol"]
     pd.testing.assert_frame_equal(
-        app.dataframe[0].value, expected.search("fish", 1), check_dtype=False,
+        app.expander[0].dataframe[0].value.drop(columns="coauthors"),
+        expected.search("fish", 1), check_dtype=False,
     )
     assert len(engines) == 1
     assert "https://example.test/fish" in app.markdown[0].value
@@ -87,7 +100,8 @@ def test_empty_then_valid_search(app_corpus: Corpus) -> None:
     app.text_input[0].set_value("unknown")
     app.button[0].click().run()
     assert not app.exception
-    assert app.dataframe[0].value.empty
+    assert app.expander[0].dataframe[0].value.empty
+    assert "coauthors" in app.expander[0].dataframe[0].value.columns
     assert app.info[0].value == "Aucun résultat."
     assert not app.markdown
 
@@ -96,10 +110,31 @@ def test_empty_then_valid_search(app_corpus: Corpus) -> None:
     app.button[0].click().run()
     assert not app.exception
     assert not app.info
-    assert len(app.dataframe) == 1
+    assert len(app.expander[0].dataframe) == 1
     pd.testing.assert_frame_equal(
-        app.dataframe[0].value, expected.search("fish", 2), check_dtype=False,
+        app.expander[0].dataframe[0].value.drop(columns="coauthors"),
+        expected.search("fish", 2), check_dtype=False,
     )
+
+
+def test_corpus_statistics(app_corpus: Corpus) -> None:
+    """Display corpus totals, source counts, document lengths, and word counts."""
+    app = AppTest.from_file(APP_PATH, default_timeout=10).run()
+
+    assert not app.exception
+    statistics = app.expander[0]
+    assert statistics.label == "Statistiques du corpus"
+    assert not statistics.proto.expanded
+    assert [(metric.label, metric.value) for metric in statistics.metric] == [
+        ("Documents", "2"), ("Auteurs", "3"), ("Mots distincts", "3"),
+    ]
+    sources = statistics.dataframe[0].value.set_index("origine")
+    assert sources["documents"].to_dict() == {"arxiv": 1, "reddit": 1}
+    assert statistics.dataframe[1].value.to_dict(orient="records") == [
+        {"doc_id": 0, "word_count": 3, "sentence_count": 1},
+        {"doc_id": 1, "word_count": 2, "sentence_count": 1},
+    ]
+    assert statistics.dataframe[2].value["tf"].to_dict() == {"cat": 2, "dog": 2, "fish": 1}
 
 
 def test_extraire_passage() -> None:
@@ -126,11 +161,11 @@ def test_collapsible_chart(app_corpus: Corpus, monkeypatch: pytest.MonkeyPatch) 
     app = AppTest.from_file(APP_PATH, default_timeout=10).run()
 
     assert not app.exception
-    assert app.expander[0].label == "Graphique des mots les plus fréquents"
-    assert app.expander[1].label == "Nuage de mots"
-    assert app.expander[2].label == "Nuage de mots sans mots courants"
-    assert app.expander[3].label == "Nuage de mots TF-IDF"
-    assert app.expander[4].label == "Évolution temporelle des documents"
+    assert app.expander[1].label == "Graphique des mots les plus fréquents"
+    assert app.expander[2].label == "Nuage de mots"
+    assert app.expander[3].label == "Nuage de mots sans mots courants"
+    assert app.expander[4].label == "Nuage de mots TF-IDF"
+    assert app.expander[5].label == "Évolution temporelle des documents"
     assert all(not expander.proto.expanded for expander in app.expander)
     assert len(app.image) == 5
     assert tables[0]["tf"].to_dict() == {"cat": 2, "dog": 2, "fish": 1}
