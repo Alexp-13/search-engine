@@ -127,8 +127,12 @@ def test_collapsible_chart(app_corpus: Corpus, monkeypatch: pytest.MonkeyPatch) 
 
     assert not app.exception
     assert app.expander[0].label == "Graphique des mots les plus fréquents"
-    assert not app.expander[0].proto.expanded
-    assert len(app.image) == 1
+    assert app.expander[1].label == "Nuage de mots"
+    assert app.expander[2].label == "Nuage de mots sans mots courants"
+    assert app.expander[3].label == "Nuage de mots TF-IDF"
+    assert app.expander[4].label == "Évolution temporelle des documents"
+    assert all(not expander.proto.expanded for expander in app.expander)
+    assert len(app.image) == 5
     assert tables[0]["tf"].to_dict() == {"cat": 2, "dog": 2, "fish": 1}
 
 

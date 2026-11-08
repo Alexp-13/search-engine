@@ -15,6 +15,7 @@ dependencies = [
     "tqdm>=4.67.1",
     "streamlit>=1.66.1",
     "requests>=2.34.2",
+    "wordcloud>=1.9.4",
 ]
 
 [dependency-groups]

@@ -12,7 +12,10 @@ from search_engine import Corpus, Document, SearchEngine
 from search_engine.generation import (
     DEFAULT_GROQ_MODEL, DEFAULT_MODEL, GenerationError, analyser_documents,
 )
-from search_engine.visualizations import plot_word_frequencies
+from search_engine.visualizations import (
+    filter_stopwords, plot_temporal_evolution, plot_tfidf_word_cloud,
+    plot_word_cloud, plot_word_frequencies,
+)
 
 
 @st.cache_resource(show_spinner="Chargement du corpus...")
@@ -138,7 +141,7 @@ def afficher_resultat(document: Document, score: float, mots_cles: str) -> None:
 
 
 def main() -> None:
-    """Render search controls, results, and a collapsible word-frequency chart."""
+    """Render search controls, results, and collapsible corpus visualizations."""
     st.title("Moteur de recherche")
     try:
         moteur = charger_moteur()
@@ -163,6 +166,21 @@ def main() -> None:
         with st.expander("Graphique des mots les plus fréquents", expanded=False):
             frequences = SearchEngine.get_word_frequencies(moteur.freq, 10)
             st.pyplot(plot_word_frequencies(frequences))
+
+        with st.expander("Nuage de mots", expanded=False):
+            frequences_nuage = SearchEngine.get_word_frequencies(moteur.freq, 100)
+            st.pyplot(plot_word_cloud(frequences_nuage))
+
+        with st.expander("Nuage de mots sans mots courants", expanded=False):
+            frequences_filtrees = filter_stopwords(moteur.freq)
+            frequences_nuage = SearchEngine.get_word_frequencies(frequences_filtrees, 100)
+            st.pyplot(plot_word_cloud(frequences_nuage))
+
+        with st.expander("Nuage de mots TF-IDF", expanded=False):
+            st.pyplot(plot_tfidf_word_cloud(moteur))
+
+        with st.expander("Évolution temporelle des documents", expanded=False):
+            st.pyplot(plot_temporal_evolution(moteur.corpus.documents.values()))
 
         if resultats is not None:
             if resultats.empty:

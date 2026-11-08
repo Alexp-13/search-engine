@@ -1,13 +1,21 @@
-"""Test word-frequency bar labels, values, and input preservation."""
+"""Test figures built from word frequencies and document dates."""
 
-from datetime import datetime
+from datetime import UTC, datetime, timedelta, timezone
+from math import log
 
 import pandas as pd
 import pytest
 from matplotlib.figure import Figure
+from wordcloud import WordCloud
 
 from search_engine import Corpus, Document, SearchEngine
-from search_engine.visualizations import plot_word_frequencies
+from search_engine.visualizations import (
+    filter_stopwords,
+    plot_temporal_evolution,
+    plot_tfidf_word_cloud,
+    plot_word_cloud,
+    plot_word_frequencies,
+)
 
 
 def test_plot_word_frequencies() -> None:
@@ -67,6 +75,119 @@ def test_plot_empty_table() -> None:
     assert figure.axes[0].get_yticklabels() == []
     assert table.empty
     assert list(table.columns) == ["tf", "df"]
+
+
+def test_plot_word_cloud() -> None:
+    """Create a deterministic cloud from frequencies without modifying them."""
+    table = pd.DataFrame({"tf": [3, 2, 1]}, index=["cat", "dog", "fish"])
+    original = table.copy()
+
+    figure = plot_word_cloud(table)
+    repeated = plot_word_cloud(table)
+
+    assert isinstance(figure, Figure)
+    image = figure.axes[0].images[0].get_array()
+    assert image.shape == (400, 800, 3)
+    assert (image == repeated.axes[0].images[0].get_array()).all()
+    pd.testing.assert_frame_equal(table, original)
+
+
+def test_filter_stopwords() -> None:
+    """Remove common words before ranking without changing term counts."""
+    table = pd.DataFrame(
+        {"tf": [100, 80, 70, 3, 2], "df": [2, 2, 2, 1, 1]},
+        index=["The", "that", "a", "neural", "learning"],
+    )
+    original = table.copy()
+
+    filtered = filter_stopwords(table)
+    selected = SearchEngine.get_word_frequencies(filtered, 2)
+
+    assert selected["tf"].to_dict() == {"neural": 3, "learning": 2}
+    assert selected["df"].to_dict() == {"neural": 1, "learning": 1}
+    pd.testing.assert_frame_equal(table, original)
+
+
+def test_filter_only_stopwords() -> None:
+    """Allow an empty cloud after removing every supplied word."""
+    table = pd.DataFrame({"tf": [3, 2, 1]}, index=["the", "that", "a"])
+
+    filtered = filter_stopwords(table)
+    figure = plot_word_cloud(filtered)
+
+    assert filtered.empty
+    assert list(filtered.columns) == ["tf"]
+    assert not figure.axes[0].images
+    assert filter_stopwords(filtered).empty
+
+
+def test_tfidf_word_cloud(corpus: Corpus, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Use summed TF-IDF weights and omit ubiquitous words before selection."""
+    corpus.add(Document("First", "Alice", datetime(2026, 1, 1), "", "the " * 50 + "cat cat"))
+    corpus.add(Document("Second", "Bob", datetime(2026, 1, 1), "", "the " * 50 + "fish cat"))
+    corpus.add(Document("Third", "Carol", datetime(2026, 1, 1), "", "the dog"))
+    engine = SearchEngine(corpus)
+    original_freq = engine.freq.copy()
+    original_matrix = engine.mat_TFxIDF.copy()
+    captured = []
+    generate = WordCloud.generate_from_frequencies
+
+    def record_weights(cloud, frequencies, **kwargs):
+        """Record weights and generate the real word-cloud image."""
+        if not kwargs:
+            captured.append(frequencies.copy())
+        return generate(cloud, frequencies, **kwargs)
+
+    monkeypatch.setattr(WordCloud, "generate_from_frequencies", record_weights)
+
+    figure = plot_tfidf_word_cloud(engine, 2)
+
+    assert isinstance(figure, Figure) and len(figure.axes[0].images) == 1
+    assert list(captured[0]) == ["cat", "dog"]
+    assert captured[0] == pytest.approx({"cat": 3 * log(3 / 2), "dog": log(3)})
+    pd.testing.assert_frame_equal(engine.freq, original_freq)
+    assert (engine.mat_TFxIDF != original_matrix).nnz == 0
+
+
+@pytest.mark.parametrize("texts,n", [([], 100), (["the", "the"], 100), (["cat", "fish"], 0)])
+def test_empty_tfidf_word_cloud(corpus: Corpus, texts: list[str], n: int) -> None:
+    """Handle empty corpora, entirely zero weights, and a zero word limit."""
+    for number, text in enumerate(texts):
+        corpus.add(Document(str(number), "Alice", datetime(2026, 1, 1), "", text))
+
+    figure = plot_tfidf_word_cloud(SearchEngine(corpus), n)
+
+    assert isinstance(figure, Figure) and not figure.axes[0].images
+
+
+def test_plot_temporal_evolution(corpus: Corpus) -> None:
+    """Group UTC days, sort unsorted dates, and include days without documents."""
+    dates = [
+        datetime(2026, 1, 3, 12, tzinfo=UTC),
+        datetime(2026, 1, 1, 12),
+        datetime(2026, 1, 2, 1, tzinfo=timezone(timedelta(hours=2))),
+    ]
+    for number, date in enumerate(dates):
+        corpus.add(Document(str(number), "Alice", date, "", "cat"))
+
+    figure = plot_temporal_evolution(corpus.documents.values())
+
+    assert isinstance(figure, Figure)
+    line = figure.axes[0].lines[0]
+    assert list(line.get_ydata()) == [2, 0, 1]
+    assert [date.date().isoformat() for date in line.get_xdata()] == [
+        "2026-01-01", "2026-01-02", "2026-01-03",
+    ]
+    assert [document.date for document in corpus.documents.values()] == dates
+
+
+def test_empty_visualizations() -> None:
+    """Return usable figures when no words or documents are available."""
+    cloud = plot_word_cloud(pd.DataFrame(columns=["tf", "df"], dtype=int))
+    timeline = plot_temporal_evolution([])
+
+    assert isinstance(cloud, Figure) and not cloud.axes[0].images
+    assert isinstance(timeline, Figure) and not timeline.axes[0].lines
 
 
 @pytest.mark.parametrize(
